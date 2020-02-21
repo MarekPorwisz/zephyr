@@ -5,10 +5,11 @@
 Zephyr 2.2.0 (Working Draft)
 ############################
 
-We are pleased to announce the release of Zephyr kernel version 2.2.0.
+We are pleased to announce the release of Zephyr RTOS version 2.2.0.
 
 Major enhancements with this release include:
 
+* We added initial support for 64-bit ARMv8-A architecture (Experimental).
 * CANopen protocol support through 3rd party CANopenNode stack
 
 The following sections provide detailed lists of changes by component.
@@ -144,7 +145,15 @@ Architectures
 
 * ARM:
 
-  * Removed support for CC2650
+  * Added initial support for ARMv8-A 64-bit architecture (Experimental)
+  * Added support for Direct Dynamic Interrupts in ARM Cortex-M
+  * Fixed several critical bugs in ARM Cortex-R architecture port
+  * Fixed several critical bugs in Stack Limit checking for ARMv8-M
+  * Added QEMU emulation support for ARM Cortex-A53
+  * Enhanced QEMU emulation support for ARM Cortex-R architecture
+  * Enhanced test coverage for ARM-specific kernel features
+  * Added support for GIC SGI and PPI interrupt types
+  * Refactored GIC driver to support multiple GIC versions
 
 * POSIX:
 
@@ -152,7 +161,12 @@ Architectures
 
 * RISC-V:
 
-  * <TBD>
+  * Added GPIO driver for LiteX VexRiscv
+  * Fixed Ethernet networking for LiteX VexRiscv
+  * Added Programmable Interrupt Controller support for SweRV
+  * Fixed invalid channel bug for RV32M1 interrupt controller
+  * Added PWM support for RV32M1
+  * Optimized reads of MTIME/MTIMECMP on 64-bit RISC-V
 
 * x86:
 
@@ -172,6 +186,13 @@ Boards & SoC Support
   .. rst-class:: rst-columns
 
      * <TBD>
+
+* Removed support for these ARM boards:
+
+  .. rst-class:: rst-columns
+
+     * TI CC2650
+
 
 * Added support for these following shields:
 
@@ -219,7 +240,8 @@ Drivers and Sensors
 
 * EEPROM
 
-  * <TBD>
+  * Added EEPROM driver for STM32L0 and STM32L1 SoC series
+  * Added EEPROM simulator (replacing native_posix EEPROM driver)
 
 * Entropy
 
