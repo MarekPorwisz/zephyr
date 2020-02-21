@@ -43,6 +43,14 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 #define FRAME_TYPE_MASK 0x07
 #define FRAME_TYPE_ACK 0x02
 
+
+typedef enum
+{
+	kEventEnergyDetectionStart, /* Requested to start Energy Detection 
+					procedure. */
+	kEventEnergyDetected, /* Energy Detection finished. */
+} RadioPendingEvents;
+
 static otRadioState sState = OT_RADIO_STATE_DISABLED;
 
 static otRadioFrame sTransmitFrame;
@@ -57,6 +65,62 @@ static struct ieee802154_radio_api *radio_api;
 
 static s8_t tx_power;
 static u16_t channel;
+
+static u16_t sEnergyDetectionTime;
+static u8_t  sEnergyDetectionChannel;
+static s8_t   sEnergyDetected;
+
+static uint32_t sPendingEvents;
+
+static inline bool isPendingEventSet(RadioPendingEvents aEvent)
+{
+    return sPendingEvents & (1UL << aEvent);
+}
+
+static void setPendingEvent(RadioPendingEvents aEvent)
+{
+	volatile uint32_t pendingEvents;
+	uint32_t          bitToSet = 1UL << aEvent;
+
+	do {
+		pendingEvents = __LDREXW((uint32_t *)&sPendingEvents);
+		pendingEvents |= bitToSet;
+	} while (__STREXW(pendingEvents, (uint32_t *)&sPendingEvents));
+
+	otSysEventSignalPending();
+}
+
+static void resetPendingEvent(RadioPendingEvents aEvent)
+{
+	volatile uint32_t pendingEvents;
+	uint32_t          bitsToRemain = ~(1UL << aEvent);
+
+	do
+	{
+		pendingEvents = __LDREXW((uint32_t *)&sPendingEvents);
+		pendingEvents &= bitsToRemain;
+	} while (__STREXW(pendingEvents, (uint32_t *)&sPendingEvents));
+}
+
+static inline void clearPendingEvents(void)
+{
+	/* Clear pending events that could cause race in the MAC layer. */
+	volatile uint32_t pendingEvents;
+	uint32_t          bitsToRemain = ~(0UL);
+
+	do {
+		pendingEvents = __LDREXW((uint32_t *)&sPendingEvents);
+		pendingEvents &= bitsToRemain;
+	} while (__STREXW(pendingEvents, (uint32_t *)&sPendingEvents));
+}
+
+void energy_detected(struct device *dev, s16_t max_ed)
+{
+	if (dev == radio_dev){
+		sEnergyDetected = max_ed;
+		setPendingEvent(kEventEnergyDetected);
+	}
+}
 
 enum net_verdict ieee802154_radio_handle_ack(struct net_if *iface,
 					     struct net_pkt *pkt)
@@ -123,6 +187,7 @@ void platformRadioInit(void)
 
 void platformRadioProcess(otInstance *aInstance)
 {
+	bool isEventPending = false;
 	if (sState == OT_RADIO_STATE_TRANSMIT) {
 		otError result = OT_ERROR_NONE;
 
@@ -183,7 +248,31 @@ void platformRadioProcess(otInstance *aInstance)
 						  NULL, result);
 			}
 		}
+	} else {
+		if (isPendingEventSet(kEventEnergyDetectionStart)) {
+			radio_api->set_channel(radio_dev,
+					sEnergyDetectionChannel);
+
+			if (!radio_api->ed_scan(radio_dev, 
+				sEnergyDetectionChannel, energy_detected)){
+				resetPendingEvent(kEventEnergyDetectionStart);
+			}
+			else
+			{
+				isEventPending = true;
+			}
+		}
+		if(isPendingEventSet(kEventEnergyDetected)){
+			otPlatRadioEnergyScanDone(aInstance, sEnergyDetected);
+			resetPendingEvent(kEventEnergyDetected);
+		}
+
 	}
+
+	if (isEventPending) {
+		otSysEventSignalPending();
+	}
+
 }
 
 uint16_t platformRadioChannelGet(otInstance *aInstance)
@@ -309,9 +398,30 @@ int8_t otPlatRadioGetRssi(otInstance *aInstance)
 
 otRadioCaps otPlatRadioGetCaps(otInstance *aInstance)
 {
-	ARG_UNUSED(aInstance);
+	otRadioCaps caps = OT_RADIO_CAPS_NONE;
 
-	return OT_RADIO_CAPS_NONE;
+	enum ieee802154_hw_caps radio_caps;
+	ARG_UNUSED(aInstance);
+	__ASSERT(radio_dev, 
+	    "platformRadioInit needs to be called prior to otPlatRadioGetCaps");
+	__ASSERT(radio_api, 
+	    "platformRadioInit needs to be called prior to otPlatRadioGetCaps");
+
+	radio_caps = radio_api->get_capabilities(radio_dev);
+	if (radio_caps & IEEE802154_HW_TX_RX_ACK){
+		caps |= OT_RADIO_CAPS_ACK_TIMEOUT;
+	}
+
+	if (radio_caps & IEEE802154_HW_CSMA){
+		caps |= OT_RADIO_CAPS_CSMA_BACKOFF;
+	}
+
+	if (radio_caps & IEEE802154_HW_ENERGY_SCAN){
+		caps |= OT_RADIO_CAPS_ENERGY_SCAN;
+	}
+
+
+	return caps;
 }
 
 bool otPlatRadioGetPromiscuous(otInstance *aInstance)
@@ -320,7 +430,7 @@ bool otPlatRadioGetPromiscuous(otInstance *aInstance)
 
 	/* TODO: No API in Zephyr to get promiscuous mode. */
 	bool result = false;
-
+	
 	LOG_DBG("PromiscuousMode=%d", result ? 1 : 0);
 	return result;
 }
@@ -329,7 +439,7 @@ void otPlatRadioSetPromiscuous(otInstance *aInstance, bool aEnable)
 {
 	ARG_UNUSED(aInstance);
 	ARG_UNUSED(aEnable);
-
+	
 	LOG_DBG("PromiscuousMode=%d", aEnable ? 1 : 0);
 	/* TODO: No API in Zephyr to set promiscuous mode. */
 }
@@ -337,11 +447,21 @@ void otPlatRadioSetPromiscuous(otInstance *aInstance, bool aEnable)
 otError otPlatRadioEnergyScan(otInstance *aInstance, u8_t aScanChannel,
 			      u16_t aScanDuration)
 {
-	ARG_UNUSED(aInstance);
-	ARG_UNUSED(aScanChannel);
-	ARG_UNUSED(aScanDuration);
+	sEnergyDetectionTime    = aScanDuration;
+	sEnergyDetectionChannel = aScanChannel;
 
-	return OT_ERROR_NOT_IMPLEMENTED;
+	clearPendingEvents();
+
+	radio_api->set_channel(radio_dev, aScanChannel);
+
+	if (!radio_api->ed_scan(radio_dev, sEnergyDetectionChannel,
+				energy_detected)) {
+		resetPendingEvent(kEventEnergyDetectionStart);
+	} else {
+		setPendingEvent(kEventEnergyDetectionStart);
+	}
+
+	return OT_ERROR_NONE;
 }
 
 void otPlatRadioEnableSrcMatch(otInstance *aInstance, bool aEnable)

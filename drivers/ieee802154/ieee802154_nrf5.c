@@ -45,6 +45,7 @@ struct nrf5_802154_config {
 };
 
 static struct nrf5_802154_data nrf5_data;
+static void (*energy_scan_done)(struct device *dev, s16_t max_ed); 
 
 #define ACK_TIMEOUT K_MSEC(10)
 
@@ -145,7 +146,7 @@ drop:
 static enum ieee802154_hw_caps nrf5_get_capabilities(struct device *dev)
 {
 	return IEEE802154_HW_FCS | IEEE802154_HW_2_4_GHZ |
-	       IEEE802154_HW_TX_RX_ACK | IEEE802154_HW_FILTER;
+	       IEEE802154_HW_TX_RX_ACK | IEEE802154_HW_FILTER| IEEE802154_HW_ENERGY_SCAN;
 }
 
 
@@ -181,6 +182,21 @@ static int nrf5_set_channel(struct device *dev, u16_t channel)
 	nrf_802154_channel_set(channel);
 
 	return 0;
+}
+
+static int nrf5_energy_scan_start(struct device *dev, u16_t duration,
+				void (*done_cb)(struct device *dev, s16_t max_ed))
+{
+	int err = 0;
+	ARG_UNUSED(dev);
+	if(energy_scan_done == NULL){
+		energy_scan_done = done_cb;
+		nrf_802154_energy_detection(duration *1000);
+	} else {
+		err = -EALREADY;
+	}
+	
+	return err;
 }
 
 static int nrf5_set_pan_id(struct device *dev, u16_t pan_id)
@@ -423,7 +439,7 @@ static void nrf5_iface_init(struct net_if *iface)
 {
 	struct device *dev = net_if_get_device(iface);
 	struct nrf5_802154_data *nrf5_radio = NRF5_802154_DATA(dev);
-
+	
 	nrf5_get_eui64(nrf5_radio->mac);
 	net_if_set_link_addr(iface, nrf5_radio->mac, sizeof(nrf5_radio->mac),
 			     NET_LINK_IEEE802154);
@@ -541,6 +557,28 @@ void nrf_802154_cca_failed(nrf_802154_cca_error_t error)
 	k_sem_give(&nrf5_data.cca_wait);
 }
 
+void nrf_802154_energy_detected(uint8_t result)
+{
+    if (energy_scan_done != NULL)
+	{
+		void (*callback)(struct device *dev, s16_t max_ed) = energy_scan_done; 
+		energy_scan_done = NULL;
+		s16_t dbm = nrf_802154_dbm_from_energy_level_calculate(result);
+		callback(net_if_get_device(nrf5_data.iface), dbm);
+	}
+}
+
+void nrf_802154_energy_detection_failed(nrf_802154_ed_error_t error)
+{
+    if (energy_scan_done != NULL)
+	{
+		void (*callback)(struct device *dev, s16_t max_ed) = energy_scan_done; 
+		energy_scan_done = NULL;
+		callback(net_if_get_device(nrf5_data.iface), SHRT_MAX);
+	}
+}
+
+
 static const struct nrf5_802154_config nrf5_radio_cfg = {
 	.irq_config_func = nrf5_irq_config,
 };
@@ -556,7 +594,11 @@ static struct ieee802154_radio_api nrf5_radio_api = {
 	.start = nrf5_start,
 	.stop = nrf5_stop,
 	.tx = nrf5_tx,
+#ifdef CONFIG_NET_L2_OPENTHREAD
+	.ed_scan = nrf5_energy_scan_start,
+#endif /* CONFIG_NET_L2_OPENTHREAD */
 	.configure = nrf5_configure,
+
 };
 
 #if defined(CONFIG_NET_L2_IEEE802154)
