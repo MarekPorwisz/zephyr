@@ -146,7 +146,8 @@ drop:
 static enum ieee802154_hw_caps nrf5_get_capabilities(struct device *dev)
 {
 	return IEEE802154_HW_FCS | IEEE802154_HW_2_4_GHZ |
-	       IEEE802154_HW_TX_RX_ACK | IEEE802154_HW_FILTER| IEEE802154_HW_ENERGY_SCAN;
+	       IEEE802154_HW_TX_RX_ACK | IEEE802154_HW_FILTER| 
+	       IEEE802154_HW_ENERGY_SCAN;
 }
 
 
@@ -185,7 +186,8 @@ static int nrf5_set_channel(struct device *dev, u16_t channel)
 }
 
 static int nrf5_energy_scan_start(struct device *dev, u16_t duration,
-				void (*done_cb)(struct device *dev, s16_t max_ed))
+				void (*done_cb)(struct device *dev,
+				 s16_t max_ed))
 {
 	int err = 0;
 	ARG_UNUSED(dev);
@@ -561,7 +563,8 @@ void nrf_802154_energy_detected(uint8_t result)
 {
     if (energy_scan_done != NULL)
 	{
-		void (*callback)(struct device *dev, s16_t max_ed) = energy_scan_done; 
+		void (*callback)(struct device *dev, s16_t max_ed) = 
+			energy_scan_done; 
 		energy_scan_done = NULL;
 		s16_t dbm = nrf_802154_dbm_from_energy_level_calculate(result);
 		callback(net_if_get_device(nrf5_data.iface), dbm);
@@ -572,7 +575,8 @@ void nrf_802154_energy_detection_failed(nrf_802154_ed_error_t error)
 {
     if (energy_scan_done != NULL)
 	{
-		void (*callback)(struct device *dev, s16_t max_ed) = energy_scan_done; 
+		void (*callback)(struct device *dev, s16_t max_ed) = 
+			energy_scan_done; 
 		energy_scan_done = NULL;
 		callback(net_if_get_device(nrf5_data.iface), SHRT_MAX);
 	}
