@@ -46,10 +46,11 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
 typedef enum
 {
-	kEventEnergyDetectionStart, /* Requested to start Energy Detection 
+	pending_events_detect_energy, /* Requested to start Energy Detection
 					procedure. */
-	kEventEnergyDetected, /* Energy Detection finished. */
-} RadioPendingEvents;
+	pending_events_detect_energy_done, /* Energy Detection finished. */
+	pending_events_count /* keep last */
+} pending_events_t;
 
 static otRadioState sState = OT_RADIO_STATE_DISABLED;
 
@@ -66,59 +67,39 @@ static struct ieee802154_radio_api *radio_api;
 static s8_t tx_power;
 static u16_t channel;
 
-static u16_t sEnergyDetectionTime;
-static u8_t  sEnergyDetectionChannel;
-static s8_t   sEnergyDetected;
+static u16_t energy_detection_time;
+static u8_t  energy_detection_channel;
+static s8_t  energy_detected_value;
 
-static uint32_t sPendingEvents;
+ATOMIC_DEFINE(pending_events, pending_events_count);
 
-static inline bool isPendingEventSet(RadioPendingEvents aEvent)
+
+static inline bool is_pending_event_set(pending_events_t event)
 {
-    return sPendingEvents & (1UL << aEvent);
+	return atomic_test_bit(pending_events, event);
 }
 
-static void setPendingEvent(RadioPendingEvents aEvent)
+static void set_pending_event(pending_events_t event)
 {
-	volatile uint32_t pendingEvents;
-	uint32_t          bitToSet = 1UL << aEvent;
-
-	do {
-		pendingEvents = __LDREXW((uint32_t *)&sPendingEvents);
-		pendingEvents |= bitToSet;
-	} while (__STREXW(pendingEvents, (uint32_t *)&sPendingEvents));
-
+	atomic_set_bit(pending_events, event);
 	otSysEventSignalPending();
 }
 
-static void resetPendingEvent(RadioPendingEvents aEvent)
+static void reset_pending_event(pending_events_t event)
 {
-	volatile uint32_t pendingEvents;
-	uint32_t          bitsToRemain = ~(1UL << aEvent);
-
-	do
-	{
-		pendingEvents = __LDREXW((uint32_t *)&sPendingEvents);
-		pendingEvents &= bitsToRemain;
-	} while (__STREXW(pendingEvents, (uint32_t *)&sPendingEvents));
+	atomic_clear_bit(pending_events, event);
 }
 
-static inline void clearPendingEvents(void)
+static inline void clear_pending_events(void)
 {
-	/* Clear pending events that could cause race in the MAC layer. */
-	volatile uint32_t pendingEvents;
-	uint32_t          bitsToRemain = ~(0UL);
-
-	do {
-		pendingEvents = __LDREXW((uint32_t *)&sPendingEvents);
-		pendingEvents &= bitsToRemain;
-	} while (__STREXW(pendingEvents, (uint32_t *)&sPendingEvents));
+	atomic_clear(pending_events);
 }
 
 void energy_detected(struct device *dev, s16_t max_ed)
 {
 	if (dev == radio_dev){
-		sEnergyDetected = max_ed;
-		setPendingEvent(kEventEnergyDetected);
+		energy_detected_value = max_ed;
+		set_pending_event(pending_events_detect_energy_done);
 	}
 }
 
@@ -187,7 +168,7 @@ void platformRadioInit(void)
 
 void platformRadioProcess(otInstance *aInstance)
 {
-	bool isEventPending = false;
+	bool event_pending = false;
 	if (sState == OT_RADIO_STATE_TRANSMIT) {
 		otError result = OT_ERROR_NONE;
 
@@ -249,27 +230,27 @@ void platformRadioProcess(otInstance *aInstance)
 			}
 		}
 	} else {
-		if (isPendingEventSet(kEventEnergyDetectionStart)) {
+		if (is_pending_event_set(pending_events_detect_energy)) {
 			radio_api->set_channel(radio_dev,
-					sEnergyDetectionChannel);
+					energy_detection_channel);
 
-			if (!radio_api->ed_scan(radio_dev, 
-				sEnergyDetectionChannel, energy_detected)){
-				resetPendingEvent(kEventEnergyDetectionStart);
-			}
-			else
-			{
-				isEventPending = true;
+			if (!radio_api->ed_scan(radio_dev,
+				energy_detection_channel, energy_detected)){
+				reset_pending_event(
+					pending_events_detect_energy);
+			} else {
+				event_pending = true;
 			}
 		}
-		if(isPendingEventSet(kEventEnergyDetected)){
-			otPlatRadioEnergyScanDone(aInstance, sEnergyDetected);
-			resetPendingEvent(kEventEnergyDetected);
+		if (is_pending_event_set(pending_events_detect_energy_done)) {
+			otPlatRadioEnergyScanDone(aInstance,
+						  energy_detected_value);
+			reset_pending_event(pending_events_detect_energy_done);
 		}
 
 	}
 
-	if (isEventPending) {
+	if (event_pending) {
 		otSysEventSignalPending();
 	}
 
@@ -402,14 +383,18 @@ otRadioCaps otPlatRadioGetCaps(otInstance *aInstance)
 
 	enum ieee802154_hw_caps radio_caps;
 	ARG_UNUSED(aInstance);
-	__ASSERT(radio_dev, 
+	__ASSERT(radio_dev,
 	    "platformRadioInit needs to be called prior to otPlatRadioGetCaps");
-	__ASSERT(radio_api, 
+	__ASSERT(radio_api,
 	    "platformRadioInit needs to be called prior to otPlatRadioGetCaps");
 
 	radio_caps = radio_api->get_capabilities(radio_dev);
 	if (radio_caps & IEEE802154_HW_TX_RX_ACK){
-		caps |= OT_RADIO_CAPS_ACK_TIMEOUT;
+		/*
+		  In current state of nrf radio driver ack timeout is not
+		  supported
+		  caps |= OT_RADIO_CAPS_ACK_TIMEOUT;
+		*/
 	}
 
 	if (radio_caps & IEEE802154_HW_CSMA){
@@ -420,7 +405,6 @@ otRadioCaps otPlatRadioGetCaps(otInstance *aInstance)
 		caps |= OT_RADIO_CAPS_ENERGY_SCAN;
 	}
 
-
 	return caps;
 }
 
@@ -430,7 +414,7 @@ bool otPlatRadioGetPromiscuous(otInstance *aInstance)
 
 	/* TODO: No API in Zephyr to get promiscuous mode. */
 	bool result = false;
-	
+
 	LOG_DBG("PromiscuousMode=%d", result ? 1 : 0);
 	return result;
 }
@@ -439,7 +423,7 @@ void otPlatRadioSetPromiscuous(otInstance *aInstance, bool aEnable)
 {
 	ARG_UNUSED(aInstance);
 	ARG_UNUSED(aEnable);
-	
+
 	LOG_DBG("PromiscuousMode=%d", aEnable ? 1 : 0);
 	/* TODO: No API in Zephyr to set promiscuous mode. */
 }
@@ -447,18 +431,18 @@ void otPlatRadioSetPromiscuous(otInstance *aInstance, bool aEnable)
 otError otPlatRadioEnergyScan(otInstance *aInstance, u8_t aScanChannel,
 			      u16_t aScanDuration)
 {
-	sEnergyDetectionTime    = aScanDuration;
-	sEnergyDetectionChannel = aScanChannel;
+	energy_detection_time    = aScanDuration;
+	energy_detection_channel = aScanChannel;
 
-	clearPendingEvents();
+	clear_pending_events();
 
 	radio_api->set_channel(radio_dev, aScanChannel);
 
-	if (!radio_api->ed_scan(radio_dev, sEnergyDetectionChannel,
+	if (!radio_api->ed_scan(radio_dev, energy_detection_channel,
 				energy_detected)) {
-		resetPendingEvent(kEventEnergyDetectionStart);
+		reset_pending_event(pending_events_detect_energy);
 	} else {
-		setPendingEvent(kEventEnergyDetectionStart);
+		set_pending_event(pending_events_detect_energy);
 	}
 
 	return OT_ERROR_NONE;

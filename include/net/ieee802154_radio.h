@@ -26,6 +26,8 @@ extern "C" {
  * @{
  */
 
+typedef void (*energy_scan_done_cb)(struct device *dev, s16_t max_ed);
+
 enum ieee802154_hw_caps {
 	IEEE802154_HW_FCS	  = BIT(0), /* Frame Check-Sum supported */
 	IEEE802154_HW_PROMISC	  = BIT(1), /* Promiscuous mode supported */
@@ -150,8 +152,7 @@ struct ieee802154_radio_api {
 	 */
 	int (*ed_scan)(struct device *dev,
 		       u16_t duration,
-		       void (*done_cb)(struct device *dev,
-				       s16_t max_ed));
+		       energy_scan_done_cb done_cb);
 #endif /* CONFIG_NET_L2_OPENTHREAD */
 };
 
