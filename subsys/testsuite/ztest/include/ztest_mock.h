@@ -53,6 +53,37 @@
 				    (uintptr_t)(param))
 
 /**
+ * @brief Tell function @a func to expect the data @a data for @a param
+ *
+ * When using ztest_check_expected_data(), tell that the data ponted by @a param
+ * should be same as data at @a data.
+ * Only data pointer is stored by this function so it must still be valid when
+ * ztest_check_expected_data is called.
+ *
+ * @param func Function in question
+ * @param param Parameter for which the data should be set
+ * @param data pointer for the data for parameter @a param
+ */
+#define ztest_expect_data(func, param, data) \
+	z_ztest_expect_data(STRINGIFY(func), STRINGIFY(param), (data))
+
+/**
+ * @brief If data pointed by @a param don't match the data set by
+ * ztest_expect_data(), fail the test
+ *
+ * This will first check that does @a param have a value to be expected, and
+ * then checks whether the data pointed by parameter are equal to expected data.
+ * If either of these checks fail, the current test will fail. This
+ * must be called from the called function.
+ *
+ * @param param Parameter to check
+ * @param length Length of the data to compare
+ */
+#define ztest_check_expected_data(param, length) \
+	z_ztest_check_expected_data(__func__, STRINGIFY(param), \
+				    (param), (length))
+
+/**
  * @brief Tell @a func that it should return @a value
  *
  * @param func Function that should return @a value
@@ -101,6 +132,10 @@ int z_cleanup_mock(void);
 void z_ztest_expect_value(const char *fn, const char *name, uintptr_t value);
 void z_ztest_check_expected_value(const char *fn, const char *param,
 				 uintptr_t value);
+
+void z_ztest_expect_data(const char *fn, const char *name, void* val);
+void z_ztest_check_expected_data(const char *fn, const char *name,
+				 void* data, u32_t length);
 
 void z_ztest_returns_value(const char *fn, uintptr_t value);
 uintptr_t z_ztest_get_return_value(const char *fn);

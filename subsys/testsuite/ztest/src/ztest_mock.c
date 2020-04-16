@@ -200,9 +200,44 @@ void z_ztest_check_expected_value(const char *fn, const char *name,
 		/* We need to cast these values since the toolchain doesn't
 		 * provide inttypes.h
 		 */
-		PRINT("%s received wrong value: Got %lu, expected %lu\n",
-		      fn, (unsigned long)val, (unsigned long)expected);
+		PRINT("%s:%s received wrong value: Got %lu, expected %lu\n",
+		      fn, name, (unsigned long)val, (unsigned long)expected);
 		ztest_test_fail();
+	}
+}
+
+void z_ztest_expect_data(const char *fn, const char *name, void* val)
+{
+	insert_value(&parameter_list, fn, name, (uintptr_t)val);
+}
+
+void z_ztest_check_expected_data(const char *fn, const char *name,
+				 void* data, u32_t length)
+{
+	struct parameter *param;
+	void* expected;
+
+	param = find_and_delete_value(&parameter_list, fn, name);
+	if (!param) {
+		PRINT("Failed to find parameter %s for %s\n", name, fn);
+		ztest_test_fail();
+	}
+
+	expected = (void*)param->value;
+	free_parameter(param);
+
+	if (expected == NULL && data != NULL) {
+		PRINT("%s:%s received null pointer\n", fn, name);
+		ztest_test_fail();
+	} else if (data == NULL && expected != NULL) {
+		PRINT("%s:%s received data fhile expected null pointer\n", fn,
+		      name);
+		ztest_test_fail();
+	} else if(data != NULL) {
+		if (memcmp(data, expected, length) != 0) {
+			PRINT("%s:%s data provided dont match\n", fn, name);
+			ztest_test_fail();
+		}
 	}
 }
 
@@ -245,6 +280,7 @@ int z_cleanup_mock(void)
 	int fail = 0;
 
 	if (parameter_list.next) {
+		printk("Not used: %s:%s\n", parameter_list.next->fn, parameter_list.next->name);
 		fail = 1;
 	}
 	if (return_value_list.next) {
