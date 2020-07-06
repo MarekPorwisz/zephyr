@@ -38,6 +38,19 @@ menuconfig NET_L2_OPENTHREAD
 
 if NET_L2_OPENTHREAD
 
+choice OPENTHREAD_IMPLEMENTATION
+	prompt "OpenThread Selection"
+	help
+	  Select OpenThread to use for build. Custom OpenThread implementations
+	  can be added to the application Kconfig.
+
+config OPENTHREAD_SOURCES_1_1
+	bool "OpenThread 1.1 from sources"
+	help
+	  Build Zephyrs OpenThread 1.1 port from sources.
+
+endchoice
+
 config OPENTHREAD_DTLS
 	# Hidden option to enable DTLS support in OpenThread
 	bool
